@@ -1,0 +1,38 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# SENTINEL runtime data
+sentinel-data/
+sentinel-shield.toml
+*.pid
+alerts.jsonl
+alerts.log
+email_queue/
+graph.json
+
+# Test artifacts
+tests/venv/
+tests/__pycache__/
+tests/*.pyc
+/tmp/
+*.tmp
+sentinel-shield-test/
+
+# Log files generated during testing
+auth.log
+access.log
+syslog.log
