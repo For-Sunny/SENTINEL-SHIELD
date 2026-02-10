@@ -201,7 +201,7 @@ impl AttackGraph {
         self.learn_cycles += 1;
 
         // Periodic decay
-        if self.learn_cycles.is_multiple_of(self.config.decay_interval) {
+        if self.config.decay_interval > 0 && self.learn_cycles % self.config.decay_interval == 0 {
             self.decay();
         }
     }

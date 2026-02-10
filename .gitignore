@@ -26,6 +26,7 @@ graph.json
 
 # Test artifacts
 tests/venv/
+testsvenv/
 tests/__pycache__/
 tests/*.pyc
 /tmp/

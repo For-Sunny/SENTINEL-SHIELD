@@ -350,6 +350,10 @@ impl AttackSession {
             correlation: 0.25,
         };
 
+        // Classify the initial event into an AttackPhase so the graph
+        // can learn from the very first event in a session.
+        let initial_phase = AttackPhase::from(&event.event_type);
+
         Self {
             id: format!("{}-{}", source_ip, now.timestamp()),
             source_ip,
@@ -360,11 +364,16 @@ impl AttackSession {
             targeted_ports: Vec::new(),
             targeted_endpoints: Vec::new(),
             response_taken: false,
-            attack_phases: Vec::new(),
+            attack_phases: vec![initial_phase],
         }
     }
 
     /// Add an event to this session.
+    ///
+    /// In addition to tracking ports and endpoints, each event is classified
+    /// into an `AttackPhase` and appended to `attack_phases` (deduplicating
+    /// consecutive identical phases). This feeds the Hebbian graph learning
+    /// in `DetectionEngine::update_graph()`.
     pub fn add_event(&mut self, event: DetectionEvent) {
         if event.timestamp > self.last_seen {
             self.last_seen = event.timestamp;
@@ -379,6 +388,16 @@ impl AttackSession {
                 self.targeted_endpoints.push(endpoint.clone());
             }
         }
+
+        // Classify the event into an AttackPhase and track the progression.
+        // Deduplicate consecutive identical phases so the graph only learns
+        // actual phase transitions (e.g., Recon -> CredentialAccess), not
+        // repeated observations of the same phase.
+        let phase = AttackPhase::from(&event.event_type);
+        if self.attack_phases.last() != Some(&phase) {
+            self.attack_phases.push(phase);
+        }
+
         self.events.push(event);
     }
 

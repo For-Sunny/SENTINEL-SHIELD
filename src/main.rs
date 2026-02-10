@@ -60,8 +60,8 @@ async fn main() -> ShieldResult<()> {
 
     match cli.command {
         Commands::Start => cmd_start(&cli.config).await,
-        Commands::Status => cmd_status(&cli.config).await,
-        Commands::Stop => cmd_stop(&cli.config).await,
+        Commands::Status => cmd_status(&cli.config),
+        Commands::Stop => cmd_stop(&cli.config),
         Commands::InitConfig => cmd_init_config(&cli.config),
     }
 }
@@ -247,7 +247,7 @@ async fn cmd_start(config_path: &Path) -> ShieldResult<()> {
         cycles += 1;
 
         // 6. Periodic maintenance
-        if cycles.is_multiple_of(maintenance_interval) {
+        if maintenance_interval > 0 && cycles % maintenance_interval == 0 {
             // Prune old sessions
             let before = engine.sessions().len();
             engine.prune_sessions(session_max_age_secs);
@@ -272,8 +272,9 @@ async fn cmd_start(config_path: &Path) -> ShieldResult<()> {
             }
         }
 
-        // 7. Sleep for poll interval
-        std::thread::sleep(poll_interval);
+        // 7. Sleep for poll interval (use tokio::time::sleep to avoid
+        // blocking the async runtime's executor thread)
+        tokio::time::sleep(poll_interval).await;
     }
 
     // -----------------------------------------------------------------------
@@ -298,7 +299,7 @@ async fn cmd_start(config_path: &Path) -> ShieldResult<()> {
 }
 
 /// Show the current status of the running daemon.
-async fn cmd_status(config_path: &Path) -> ShieldResult<()> {
+fn cmd_status(config_path: &Path) -> ShieldResult<()> {
     let config = if config_path.exists() {
         ShieldConfig::from_file(config_path)?
     } else {
@@ -378,7 +379,7 @@ async fn cmd_status(config_path: &Path) -> ShieldResult<()> {
 }
 
 /// Stop the running daemon.
-async fn cmd_stop(config_path: &Path) -> ShieldResult<()> {
+fn cmd_stop(config_path: &Path) -> ShieldResult<()> {
     let config = if config_path.exists() {
         ShieldConfig::from_file(config_path)?
     } else {

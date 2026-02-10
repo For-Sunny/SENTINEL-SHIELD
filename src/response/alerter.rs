@@ -87,6 +87,13 @@ pub fn log_alert(
 /// Timeout: 5 seconds. Failures are logged but do not propagate as
 /// errors to prevent webhook issues from disrupting the daemon.
 ///
+/// **Rate limiting note:** This function is called synchronously for each
+/// threatening IP. During a large-scale scan (e.g., 50 IPs triggering
+/// simultaneously), this results in 50 sequential HTTP POSTs, each with
+/// a 5-second timeout. In the worst case this blocks the response loop
+/// for up to 250 seconds. A future improvement should batch alerts into
+/// a single webhook payload or move webhook delivery to a background task.
+///
 /// # Arguments
 /// * `webhook_url` - The URL to POST to (must start with http:// or https://).
 /// * `source_ip` - The threatening IP address.

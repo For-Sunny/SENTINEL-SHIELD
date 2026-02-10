@@ -211,6 +211,16 @@ impl ResponseOrchestrator {
     }
 
     /// Check if an IP has already been blocked (deduplication).
+    ///
+    /// NOTE: This check is in-memory only. If the daemon restarts,
+    /// `action_history` is lost, which means IPs that were blocked by a
+    /// previous run will not be recognized as already blocked. This can
+    /// result in duplicate firewall rules (iptables -A / netsh add).
+    ///
+    /// TODO: On startup, either:
+    ///   1. Query the actual firewall state for SENTINEL-SHIELD-BLOCK rules, or
+    ///   2. Persist the block list to `{data_dir}/blocked_ips.json` and reload
+    ///      it on startup.
     pub fn is_blocked(&self, ip: &IpAddr) -> bool {
         self.action_history.iter().any(|a| {
             a.target_ip == *ip

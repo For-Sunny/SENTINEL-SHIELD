@@ -60,12 +60,15 @@ impl DetectionEngine {
 
         for event in events {
             let ip = event.source_ip;
-            let session = self.sessions
-                .entry(ip)
-                .or_insert_with(|| AttackSession::new(event.clone()));
 
-            if session.events.len() > 1 || session.first_seen != event.timestamp {
+            if let Some(session) = self.sessions.get_mut(&ip) {
+                // Session already exists for this IP -- add the new event.
                 session.add_event(event);
+            } else {
+                // First event from this IP -- create a new session.
+                // AttackSession::new() already stores the event in session.events,
+                // so we must NOT call add_event() again for the initial event.
+                self.sessions.insert(ip, AttackSession::new(event));
             }
         }
 
