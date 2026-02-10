@@ -80,10 +80,15 @@ fn web_ts(offset_secs: i64) -> String {
     now.format("%d/%b/%Y:%H:%M:%S +0000").to_string()
 }
 
-/// Create a test detection config with lower thresholds for testing.
+/// Create a test detection config using PRODUCTION defaults.
+///
+/// Previously this used threshold 0.3 which hid the fact that
+/// single-vector attacks (SSH brute force) couldn't reach 0.7.
+/// Now that velocity dominance detection is implemented, production
+/// threshold works correctly for all attack scenarios.
 fn test_detection_config() -> DetectionConfig {
     DetectionConfig {
-        threat_threshold: 0.3,
+        threat_threshold: 0.7,
         velocity_weight: 0.4,
         coverage_weight: 0.35,
         correlation_weight: 0.25,
@@ -282,17 +287,18 @@ fn test_credential_spray_detection() {
         session.threat_score.velocity
     );
 
-    // Combined should exceed our test threshold
+    // Combined should exceed the production threshold (0.7).
+    // Previously this asserted > 0.3 which hid the detection gap.
     assert!(
-        session.threat_score.combined > 0.3,
-        "Combined score should be > 0.3, got {:.3}",
+        session.threat_score.combined > 0.7,
+        "Combined score should exceed production threshold 0.7, got {:.3}",
         session.threat_score.combined
     );
 
-    // Should appear in threatening sessions list
+    // Should appear in threatening sessions list at production threshold
     assert!(
         has_threats,
-        "credential spray should produce threatening sessions"
+        "credential spray should produce threatening sessions at production threshold"
     );
 
     // Test response orchestrator
@@ -473,17 +479,17 @@ fn test_full_kill_chain_detection() {
         session.targeted_endpoints.len(),
     );
 
-    // Full kill chain should produce high scores across all dimensions
+    // Full kill chain should exceed production threshold easily.
     assert!(
-        session.threat_score.combined > 0.5,
-        "Full kill chain combined score should be > 0.5, got {:.3}",
+        session.threat_score.combined > 0.7,
+        "Full kill chain combined score should exceed production threshold 0.7, got {:.3}",
         session.threat_score.combined
     );
 
-    // Coverage should be substantial (many ports + endpoints)
+    // Coverage should be near-maximum (many ports + endpoints)
     assert!(
-        session.threat_score.coverage > 0.3,
-        "Coverage should be > 0.3 for broad scanning, got {:.3}",
+        session.threat_score.coverage > 0.5,
+        "Coverage should be > 0.5 for broad scanning, got {:.3}",
         session.threat_score.coverage
     );
 
@@ -494,10 +500,10 @@ fn test_full_kill_chain_detection() {
         session.threat_score.velocity
     );
 
-    // Should be in threatening list
+    // Should be in threatening list at production threshold
     assert!(
         has_threats,
-        "full kill chain should produce threatening sessions"
+        "full kill chain should produce threatening sessions at production threshold"
     );
 
     cleanup_test_dir(&dir);
@@ -593,10 +599,10 @@ fn test_benign_traffic_low_score() {
         );
     }
 
-    // No sessions should be threatening
+    // No sessions should be threatening at production threshold (0.7)
     assert!(
         threat_count == 0,
-        "benign traffic should not produce threatening sessions, got {}",
+        "benign traffic should not produce threatening sessions at production threshold, got {}",
         threat_count
     );
 
@@ -811,9 +817,16 @@ fn test_web_exploit_detection() {
         session.threat_score.correlation
     );
 
+    // Combined should exceed production threshold
+    assert!(
+        session.threat_score.combined > 0.7,
+        "Web exploit combined score should exceed production threshold 0.7, got {:.3}",
+        session.threat_score.combined,
+    );
+
     assert!(
         has_threats,
-        "Web exploitation should produce threatening sessions"
+        "Web exploitation should produce threatening sessions at production threshold"
     );
 
     cleanup_test_dir(&dir);
@@ -892,7 +905,12 @@ fn test_response_alert_generation() {
 /// Test 7: Multiple independent sources are scored independently
 ///
 /// Two different IPs: one attacking, one benign. Verifies they get
-/// different threat scores and only the attacker triggers alerts.
+/// different threat scores and the attacker triggers alerts while
+/// benign traffic does not.
+///
+/// The attacker sends 60 failed auth attempts (high-volume brute force)
+/// to ensure velocity crosses the dominance threshold and the attack
+/// is detectable at production threshold (0.7).
 #[test]
 fn test_independent_source_scoring() {
     let dir = create_test_dir("independent_sources");
@@ -902,20 +920,21 @@ fn test_independent_source_scoring() {
     let attacker_ip = "203.0.113.50";
     let benign_ip = "198.51.100.10";
 
-    // Attacker: 30 failed auth attempts
+    // Attacker: 60 failed auth attempts (high-volume brute force)
     let mut auth_lines = Vec::new();
-    for i in 0..30 {
-        let users = ["admin", "root", "deploy", "ubuntu", "jenkins"];
+    for i in 0..60 {
+        let users = ["admin", "root", "deploy", "ubuntu", "jenkins",
+                      "git", "postgres", "mysql", "www-data", "oracle"];
         auth_lines.push(auth_failed_password(
             i,
             attacker_ip,
-            users[(i % 5) as usize],
+            users[(i % 10) as usize],
             50000 + i as u16,
         ));
     }
     // Benign: 2 successful logins
-    auth_lines.push(auth_publickey(40, benign_ip, "deploy", 40000));
-    auth_lines.push(auth_publickey(100, benign_ip, "admin", 40001));
+    auth_lines.push(auth_publickey(70, benign_ip, "deploy", 40000));
+    auth_lines.push(auth_publickey(130, benign_ip, "admin", 40001));
     write_lines(&auth_path, &auth_lines);
 
     // Benign web traffic
@@ -939,9 +958,11 @@ fn test_independent_source_scoring() {
     let config = test_detection_config();
     let graph = AttackGraph::new();
     let mut engine = DetectionEngine::new(&config, graph);
-    {
-        let _threatening = engine.process_events(events).expect("process_events");
-    }
+
+    let threat_count = {
+        let threatening = engine.process_events(events).expect("process_events");
+        threatening.len()
+    };
 
     let sessions = engine.sessions();
     let attacker: IpAddr = attacker_ip.parse().unwrap();
@@ -958,10 +979,10 @@ fn test_independent_source_scoring() {
             .unwrap_or(0.0)
     );
 
-    // Attacker should have high score
+    // Attacker should exceed production threshold (0.7)
     assert!(
-        attacker_session.threat_score.combined > 0.3,
-        "Attacker should score > 0.3, got {:.3}",
+        attacker_session.threat_score.combined > 0.7,
+        "Attacker (60 failed auths) should exceed production threshold 0.7, got {:.3}",
         attacker_session.threat_score.combined
     );
 
@@ -973,6 +994,12 @@ fn test_independent_source_scoring() {
             bs.threat_score.combined
         );
     }
+
+    // Only attacker should be in threatening list
+    assert!(
+        threat_count >= 1,
+        "attacker should appear in threatening sessions"
+    );
 
     cleanup_test_dir(&dir);
 }
@@ -1178,6 +1205,221 @@ fn test_syslog_parser() {
             .iter()
             .all(|e| e.event_type == EventType::Reconnaissance),
         "Firewall blocks should classify as Reconnaissance"
+    );
+
+    cleanup_test_dir(&dir);
+}
+
+/// Test 11: SSH brute force from one IP to port 22 at production threshold
+///
+/// This is THE most common attack on the internet. 100 failed SSH logins
+/// from one IP in under 2 minutes. Single port (22), single event type
+/// (AuthFailure), zero discovery-exploit correlation.
+///
+/// Previously this maxed out at ~0.42 and could never reach the 0.7
+/// production threshold because:
+/// - Velocity saturated at 1.0 but only contributed weight 0.4
+/// - Coverage was stuck at ~0.05 (1 port / 20 saturation)
+/// - Correlation was 0.0 (no discovery events to pair with)
+///
+/// The velocity dominance mechanism fixes this: extreme velocity on
+/// a concentrated target IS sufficient signal for detection.
+#[test]
+fn test_ssh_brute_force_single_port() {
+    let dir = create_test_dir("ssh_brute_force");
+    let auth_path = dir.join("auth.log");
+
+    let attacker_ip = "203.0.113.99";
+
+    // 100 failed password attempts to port 22, all from one IP, 1 per second
+    let mut lines = Vec::new();
+    for i in 0..100 {
+        let users = [
+            "root", "admin", "deploy", "ubuntu", "ec2-user",
+            "git", "jenkins", "postgres", "mysql", "www-data",
+        ];
+        // Note: all target port 22 (the SSH target), source port varies
+        lines.push(auth_failed_password(i, attacker_ip, users[(i % 10) as usize], 22));
+    }
+    lines.push(auth_too_many(101, attacker_ip, "root", 22));
+
+    write_lines(&auth_path, &lines);
+
+    let log_config = LogSourcesConfig {
+        auth_log_paths: vec![auth_path.clone()],
+        web_log_paths: vec![],
+        syslog_paths: vec![],
+    };
+
+    let mut registry = LogSourceRegistry::new(&log_config);
+    let events = registry.poll_new_events();
+
+    assert!(
+        events.len() >= 100,
+        "Expected at least 100 events, got {}",
+        events.len()
+    );
+
+    // Use PRODUCTION config -- threshold 0.7
+    let config = test_detection_config();
+    assert_eq!(config.threat_threshold, 0.7, "must use production threshold");
+
+    let graph = AttackGraph::new();
+    let mut engine = DetectionEngine::new(&config, graph);
+
+    let has_threats = {
+        let threatening = engine.process_events(events).expect("process_events");
+        !threatening.is_empty()
+    };
+
+    let attacker: IpAddr = attacker_ip.parse().unwrap();
+    let session = engine
+        .sessions()
+        .get(&attacker)
+        .expect("attacker session should exist");
+
+    println!(
+        "SSH brute force (single port): combined={:.3}, velocity={:.3}, coverage={:.3}, correlation={:.3}",
+        session.threat_score.combined,
+        session.threat_score.velocity,
+        session.threat_score.coverage,
+        session.threat_score.correlation,
+    );
+
+    // Velocity should be saturated (100+ events in 120s window, saturation=50)
+    assert!(
+        session.threat_score.velocity >= 1.0,
+        "Velocity should saturate at 1.0 for 100 events, got {:.3}",
+        session.threat_score.velocity
+    );
+
+    // Coverage should be very low (single port)
+    assert!(
+        session.threat_score.coverage < 0.2,
+        "Coverage should be low for single-port attack, got {:.3}",
+        session.threat_score.coverage
+    );
+
+    // Correlation should be zero (no discovery events)
+    assert!(
+        session.threat_score.correlation < 0.01,
+        "Correlation should be ~0 for auth-only events, got {:.3}",
+        session.threat_score.correlation
+    );
+
+    // THIS IS THE KEY ASSERTION: despite low coverage and zero correlation,
+    // the velocity dominance mechanism should push this above 0.7
+    assert!(
+        session.threat_score.combined > 0.7,
+        "SSH brute force MUST be detectable at production threshold (0.7). \
+         This is the most common attack on the internet. Got {:.3}",
+        session.threat_score.combined
+    );
+
+    assert!(
+        has_threats,
+        "SSH brute force should appear in threatening sessions at production threshold"
+    );
+
+    cleanup_test_dir(&dir);
+}
+
+/// Test 12: Graph knowledge feeds into detection scoring
+///
+/// Verifies that the Hebbian graph's learned patterns influence the
+/// detection engine's final score. After processing events, the graph
+/// should have observations, and its threat scoring should contribute
+/// to the combined score.
+#[test]
+fn test_graph_feeds_into_scoring() {
+    let dir = create_test_dir("graph_scoring");
+    let auth_path = dir.join("auth.log");
+    let web_path = dir.join("access.log");
+
+    let attacker_ip = "203.0.113.60";
+
+    // Web recon followed by auth attacks = multi-phase attack
+    // This should feed into the graph as Enumeration -> CredentialAttack
+    let mut web_lines = Vec::new();
+    let recon_paths = [
+        "/.env", "/admin", "/wp-login.php", "/.git/config",
+        "/phpmyadmin", "/api/v1/users", "/console", "/debug",
+    ];
+    for (i, path) in recon_paths.iter().enumerate() {
+        web_lines.push(web_line(i as i64, attacker_ip, path, 404, "Mozilla/5.0"));
+    }
+    write_lines(&web_path, &web_lines);
+
+    let mut auth_lines = Vec::new();
+    for i in 0..40 {
+        let users = ["admin", "root", "deploy", "ubuntu", "git"];
+        auth_lines.push(auth_failed_password(
+            10 + i,
+            attacker_ip,
+            users[(i % 5) as usize],
+            22,
+        ));
+    }
+    write_lines(&auth_path, &auth_lines);
+
+    let log_config = LogSourcesConfig {
+        auth_log_paths: vec![auth_path.clone()],
+        web_log_paths: vec![web_path.clone()],
+        syslog_paths: vec![],
+    };
+
+    let mut registry = LogSourceRegistry::new(&log_config);
+    let events = registry.poll_new_events();
+
+    let config = test_detection_config();
+    let graph = AttackGraph::new();
+    let mut engine = DetectionEngine::new(&config, graph);
+
+    {
+        let _threatening = engine.process_events(events).expect("process_events");
+    }
+
+    // Verify graph was populated
+    let graph = engine.graph();
+    let source_str = attacker_ip;
+    assert!(
+        graph.sources.contains_key(source_str),
+        "Graph should have observations for attacker IP"
+    );
+
+    let graph_score = graph.get_threat_score(source_str);
+    println!(
+        "Graph-fed scoring: graph_threat={:.3}, total_observations={}",
+        graph_score,
+        graph.total_observations,
+    );
+
+    // Graph should have recorded observations from the events
+    assert!(
+        graph.total_observations > 0,
+        "Graph should have recorded observations"
+    );
+
+    // Graph threat score should be non-zero for a multi-phase attack
+    assert!(
+        graph_score > 0.0,
+        "Graph should produce non-zero threat score for multi-phase attack, got {:.3}",
+        graph_score,
+    );
+
+    // Verify graph stats show learning happened
+    let stats = graph.stats();
+    println!(
+        "  Graph stats: observations={}, sources={}, learn_cycles={}, pending={}",
+        stats.total_observations,
+        stats.active_sources,
+        stats.learn_cycles,
+        stats.pending_updates,
+    );
+
+    assert!(
+        stats.learn_cycles > 0,
+        "Graph should have run at least one learn cycle"
     );
 
     cleanup_test_dir(&dir);

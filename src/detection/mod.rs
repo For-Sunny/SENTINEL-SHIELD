@@ -17,8 +17,10 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use crate::graph::AttackGraph;
+use crate::graph::nodes::ActionType;
 use crate::{
-    AttackSession, DetectionConfig, DetectionEvent, ScoreWeights, ShieldResult, ThreatScore,
+    AttackSession, DetectionConfig, DetectionEvent, EventType,
+    ScoreWeights, ShieldResult, ThreatScore,
 };
 
 /// The detection engine. Maintains active sessions and orchestrates
@@ -52,27 +54,37 @@ impl DetectionEngine {
     /// Process a batch of new detection events.
     ///
     /// Each event is assigned to a session (by source IP), then all affected
-    /// sessions are re-scored. Returns a list of sessions that exceed the
-    /// threat threshold after scoring.
+    /// sessions are re-scored. Events are also fed into the Hebbian graph
+    /// via `add_observation()` so the graph accumulates knowledge about
+    /// attack patterns. Returns sessions that exceed the threat threshold.
     pub fn process_events(&mut self, events: Vec<DetectionEvent>) -> ShieldResult<Vec<&AttackSession>> {
-        // For each event, find or create an AttackSession for the source IP,
-        // add the event, re-score affected sessions, and return those exceeding threshold.
-
         for event in events {
             let ip = event.source_ip;
 
+            // Feed event into the Hebbian graph so SourceTracker gets
+            // populated and the graph can score per-source threats.
+            if let Some(action) = Self::event_to_action(&event.event_type) {
+                self.graph.add_observation(
+                    &ip.to_string(),
+                    action,
+                    event.timestamp,
+                );
+            }
+
             if let Some(session) = self.sessions.get_mut(&ip) {
-                // Session already exists for this IP -- add the new event.
                 session.add_event(event);
             } else {
-                // First event from this IP -- create a new session.
-                // AttackSession::new() already stores the event in session.events,
-                // so we must NOT call add_event() again for the initial event.
                 self.sessions.insert(ip, AttackSession::new(event));
             }
         }
 
-        // Re-score all sessions
+        // Update Hebbian graph with phase transitions from sessions
+        self.update_graph();
+
+        // Apply Hebbian learning on queued co-occurrence pairs
+        self.graph.learn();
+
+        // Re-score all sessions (now with graph knowledge)
         self.rescore_sessions();
 
         // Collect sessions exceeding threshold
@@ -85,14 +97,59 @@ impl DetectionEngine {
         Ok(threatening)
     }
 
-    /// Re-score all active sessions using the three detection sub-systems.
+    /// Map an EventType to the graph's ActionType for observation feeding.
+    ///
+    /// Returns None for event types that don't map cleanly to a graph node.
+    fn event_to_action(event_type: &EventType) -> Option<ActionType> {
+        match event_type {
+            EventType::Reconnaissance => Some(ActionType::Reconnaissance),
+            EventType::WebProbe => Some(ActionType::Enumeration),
+            EventType::AuthFailure => Some(ActionType::CredentialAttack),
+            EventType::BruteForce => Some(ActionType::CredentialAttack),
+            EventType::CredentialStuffing => Some(ActionType::CredentialAttack),
+            EventType::AuthSuccess => Some(ActionType::Exploitation),
+            EventType::ExploitAttempt => Some(ActionType::Exploitation),
+            EventType::LateralMovement => Some(ActionType::LateralMovement),
+            EventType::DataExfiltration => Some(ActionType::DataExfiltration),
+            EventType::Suspicious => Some(ActionType::Reconnaissance),
+        }
+    }
+
+    /// Re-score all active sessions using the three detection sub-systems
+    /// plus graph-derived knowledge.
+    ///
+    /// The graph contributes in two ways:
+    /// 1. **Adaptive weights** - `compute_adaptive_weights` shifts weight
+    ///    toward whichever signal the graph has learned is most predictive.
+    /// 2. **Graph threat boost** - if the graph's internal SourceTracker
+    ///    has a non-zero threat score for this IP (from chain detection),
+    ///    it boosts the combined score. This means the graph's accumulated
+    ///    pattern knowledge feeds into real scoring decisions.
     fn rescore_sessions(&mut self) {
         let velocity_window = self.config.velocity_window_secs;
         let velocity_saturation = self.config.velocity_saturation;
         let coverage_saturation = self.config.coverage_saturation;
         let corr_min = self.config.correlation_min_gap_secs;
         let corr_max = self.config.correlation_max_gap_secs;
-        let weights = self.weights;
+
+        // Compute adaptive weights from graph's learned edge patterns.
+        // The graph knows which attack progressions are common in THIS
+        // environment, so it shifts weight toward the most predictive signal.
+        use crate::graph::nodes::ActionType;
+        let recon_exploit_strength = self.graph.edge_weight(
+            ActionType::Reconnaissance,
+            ActionType::Exploitation,
+        );
+        let broad_scan_strength = self.graph.edge_weight(
+            ActionType::Reconnaissance,
+            ActionType::Enumeration,
+        );
+        let weights = scorer::compute_adaptive_weights(
+            &self.weights,
+            recon_exploit_strength,
+            broad_scan_strength,
+            0.3, // moderate adaptation rate
+        );
 
         for session in self.sessions.values_mut() {
             let v = velocity::calculate_velocity_score(
@@ -110,7 +167,23 @@ impl DetectionEngine {
                 corr_max,
             );
 
-            session.threat_score = ThreatScore::new(v, c, r, &weights);
+            // Query the graph's threat score for this source IP.
+            // This incorporates chain detection, edge path strength,
+            // kill-chain stage progression, and action diversity.
+            let graph_score = self.graph.get_threat_score(&session.source_ip.to_string());
+
+            // Blend graph knowledge into the final score.
+            // The graph boost is additive: if the graph detects attack chains
+            // that the velocity/coverage/correlation model misses, it pushes
+            // the score upward. Capped at 0.15 to avoid the graph alone
+            // causing false positives -- it's a boost, not a replacement.
+            let mut score = ThreatScore::new(v, c, r, &weights);
+            if graph_score > 0.0 {
+                let graph_boost = (graph_score * 0.15).min(0.15);
+                score.combined = (score.combined + graph_boost).clamp(0.0, 1.0);
+            }
+
+            session.threat_score = score;
         }
     }
 

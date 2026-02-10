@@ -260,13 +260,40 @@ pub struct ThreatScore {
 
 impl ThreatScore {
     /// Create a new ThreatScore, clamping all values to [0.0, 1.0].
+    ///
+    /// Includes velocity dominance detection: when velocity is extreme
+    /// (>0.8) and coverage is low (<0.15), the attack is a concentrated
+    /// single-vector assault (e.g., SSH brute force). In this case, the
+    /// velocity signal alone is sufficient to indicate a threat, so a
+    /// dominance boost is applied.
+    ///
+    /// Without this, pure brute force attacks (high velocity, 1 port,
+    /// no discovery/exploit correlation) max out around 0.42 and can
+    /// never reach the 0.7 production threshold.
     pub fn new(velocity: f64, coverage: f64, correlation: f64, weights: &ScoreWeights) -> Self {
         let v = velocity.clamp(0.0, 1.0);
         let c = coverage.clamp(0.0, 1.0);
         let r = correlation.clamp(0.0, 1.0);
 
-        let combined = (v * weights.velocity + c * weights.coverage + r * weights.correlation)
-            .clamp(0.0, 1.0);
+        let base = v * weights.velocity + c * weights.coverage + r * weights.correlation;
+
+        // Velocity dominance: when velocity is extreme on a narrow target,
+        // the concentration IS the signal. A brute force hitting one port
+        // at inhuman speed doesn't need coverage or correlation to be a threat.
+        //
+        // The boost scales with how extreme the velocity is beyond 0.8,
+        // and how concentrated the attack is (inverse of coverage).
+        // At v=1.0, c=0.05, this adds up to ~0.38, pushing a 0.42 base
+        // score to ~0.80 -- above the 0.7 threshold.
+        let dominance_boost = if v > 0.8 && c < 0.15 {
+            let velocity_excess = (v - 0.8) / 0.2; // 0.0 at v=0.8, 1.0 at v=1.0
+            let concentration = 1.0 - c;            // high when coverage is low
+            velocity_excess * concentration * 0.4    // max boost ~0.38
+        } else {
+            0.0
+        };
+
+        let combined = (base + dominance_boost).clamp(0.0, 1.0);
 
         Self {
             combined,

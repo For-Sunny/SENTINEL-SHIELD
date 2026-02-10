@@ -199,14 +199,75 @@ mod tests {
     #[test]
     fn test_weighted_combination() {
         let weights = default_weights();
-        let score = score_session(1.0, 0.0, 0.0, &weights);
-        assert!((score.combined - 0.4).abs() < f64::EPSILON);
 
+        // Velocity-only with high velocity triggers dominance boost:
+        // base = 1.0 * 0.4 = 0.4, dominance = (0.2/0.2)*(1.0)*0.4 = 0.4
+        // combined = 0.8
+        let score = score_session(1.0, 0.0, 0.0, &weights);
+        assert!(
+            (score.combined - 0.8).abs() < 0.01,
+            "velocity=1.0, coverage=0.0 should trigger dominance boost to ~0.8, got {}",
+            score.combined,
+        );
+
+        // Coverage-only: no dominance (velocity is 0.0)
         let score = score_session(0.0, 1.0, 0.0, &weights);
         assert!((score.combined - 0.35).abs() < f64::EPSILON);
 
+        // Correlation-only: no dominance (velocity is 0.0)
         let score = score_session(0.0, 0.0, 1.0, &weights);
         assert!((score.combined - 0.25).abs() < f64::EPSILON);
+
+        // Moderate velocity without dominance (v=0.5, below 0.8 threshold)
+        let score = score_session(0.5, 0.0, 0.0, &weights);
+        assert!(
+            (score.combined - 0.2).abs() < f64::EPSILON,
+            "moderate velocity should NOT trigger dominance, got {}",
+            score.combined,
+        );
+    }
+
+    #[test]
+    fn test_velocity_dominance_boost() {
+        let weights = default_weights();
+
+        // High velocity + low coverage = concentrated attack (brute force)
+        // Should trigger dominance and score above 0.7
+        let brute_force = score_session(1.0, 0.05, 0.0, &weights);
+        assert!(
+            brute_force.combined > 0.7,
+            "brute force (v=1.0, c=0.05) should exceed 0.7 threshold, got {:.3}",
+            brute_force.combined,
+        );
+
+        // High velocity + high coverage = broad attack, no dominance needed
+        let broad_attack = score_session(1.0, 0.5, 0.0, &weights);
+        // Coverage is 0.5 (above 0.15 threshold), so no dominance boost
+        let expected_base = 1.0 * 0.4 + 0.5 * 0.35;
+        assert!(
+            (broad_attack.combined - expected_base).abs() < 0.01,
+            "broad attack should use standard weights, got {:.3}",
+            broad_attack.combined,
+        );
+
+        // Velocity just above dominance threshold (0.85) with zero coverage
+        let borderline = score_session(0.85, 0.0, 0.0, &weights);
+        // base = 0.85 * 0.4 = 0.34, dominance = (0.05/0.2)*1.0*0.4 = 0.1
+        // combined = 0.44
+        assert!(
+            borderline.combined > 0.4,
+            "borderline velocity should get small dominance boost, got {:.3}",
+            borderline.combined,
+        );
+
+        // Below dominance threshold
+        let below = score_session(0.79, 0.0, 0.0, &weights);
+        let expected = 0.79 * 0.4;
+        assert!(
+            (below.combined - expected).abs() < f64::EPSILON,
+            "below threshold should get no boost, got {:.3}",
+            below.combined,
+        );
     }
 
     #[test]
