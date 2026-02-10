@@ -424,13 +424,22 @@ impl AttackGraph {
     ///
     /// Bridge method for the detection engine, which works in terms of
     /// `AttackPhase` from the core types. Maps phases to graph ActionTypes
-    /// and strengthens the Hebbian edge.
+    /// and strengthens the Hebbian edge at the default rate.
     pub fn strengthen_edge(&mut self, from: &AttackPhase, to: &AttackPhase) {
+        self.strengthen_edge_with_rate(from, to, 1.0);
+    }
+
+    /// Strengthen the edge between two attack phases with a rate multiplier.
+    ///
+    /// Like `strengthen_edge`, but applies an external rate multiplier from
+    /// `LearningControl`. This ensures that `update_graph()` respects the
+    /// same rate valve as the `learn_with_rate()` path.
+    pub fn strengthen_edge_with_rate(&mut self, from: &AttackPhase, to: &AttackPhase, rate: f64) {
         if let (Some(from_action), Some(to_action)) = (
             Self::phase_to_action(from),
             Self::phase_to_action(to),
         ) {
-            self.edges.strengthen(from_action, to_action, 1.0, 1.0);
+            self.edges.strengthen_with_rate(from_action, to_action, 1.0, 1.0, rate);
         }
     }
 

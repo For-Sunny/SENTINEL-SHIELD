@@ -85,13 +85,13 @@ impl DetectionEngine {
             }
         }
 
-        // Update Hebbian graph with phase transitions from sessions
-        self.update_graph();
-
-        // Apply Hebbian learning on queued co-occurrence pairs,
-        // gated by the learning control valve.
+        // Apply Hebbian learning on queued co-occurrence pairs AND
+        // phase-transition edge strengthening, both gated by the
+        // learning control valve. When an operator pauses learning,
+        // NEITHER path modifies the edge matrix.
         if self.learning_control.should_learn() {
             let rate = self.learning_control.effective_rate();
+            self.update_graph(rate);
             self.graph.learn_with_rate(rate);
         }
 
@@ -199,17 +199,28 @@ impl DetectionEngine {
     }
 
     /// Update the Hebbian graph with patterns observed in current sessions.
-    pub fn update_graph(&mut self) {
-        // For each session, extract the sequence of attack phases
-        // and feed co-occurring phases into the graph as edge activations.
+    ///
+    /// Only processes sessions where `phases_dirty` is true, meaning new
+    /// phase transitions arrived since the last call. This avoids redundant
+    /// `strengthen_edge` calls on unchanged sessions. With 500 sessions
+    /// and 3 phases each, that eliminates ~1,000 wasted calls per batch.
+    ///
+    /// The `rate` parameter is the LearningControl effective rate, so
+    /// edge strengthening respects the same valve as `learn_with_rate()`.
+    fn update_graph(&mut self, rate: f64) {
+        for session in self.sessions.values_mut() {
+            if !session.phases_dirty {
+                continue;
+            }
 
-        for session in self.sessions.values() {
             if session.attack_phases.len() >= 2 {
-                // Feed sequential phase pairs into graph
+                // Feed sequential phase pairs into graph with rate control
                 for window in session.attack_phases.windows(2) {
-                    self.graph.strengthen_edge(&window[0], &window[1]);
+                    self.graph.strengthen_edge_with_rate(&window[0], &window[1], rate);
                 }
             }
+
+            session.phases_dirty = false;
         }
     }
 

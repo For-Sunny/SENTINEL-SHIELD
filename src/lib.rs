@@ -365,6 +365,12 @@ pub struct AttackSession {
 
     /// Attack phase progression as classified by the graph.
     pub attack_phases: Vec<AttackPhase>,
+
+    /// Whether new phases have been added since the last `update_graph()` pass.
+    /// When false, `update_graph()` skips this session to avoid redundant
+    /// `strengthen_edge()` calls on unchanged phase sequences.
+    #[serde(default)]
+    pub phases_dirty: bool,
 }
 
 impl AttackSession {
@@ -393,6 +399,7 @@ impl AttackSession {
             targeted_endpoints: Vec::new(),
             response_taken: false,
             attack_phases: vec![initial_phase],
+            phases_dirty: true,
         }
     }
 
@@ -424,6 +431,7 @@ impl AttackSession {
         let phase = AttackPhase::from(&event.event_type);
         if self.attack_phases.last() != Some(&phase) {
             self.attack_phases.push(phase);
+            self.phases_dirty = true;
         }
 
         self.events.push(event);
