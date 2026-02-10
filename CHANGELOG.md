@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.1 - 2026-02-10
+
+### Fixed
+- **Double-learn bug** -- The Hebbian graph was learning twice per event batch. `main.rs` called `update_graph()` and `learn()` after `process_events()`, but `process_events()` already performed both operations internally. The duplicates in the main loop have been removed. Learning now happens once per batch, inside the detection pipeline where it belongs. The main loop handles only prune and save.
+
+### Added
+- **Learning control valve** -- Runtime control over the Hebbian graph's learning behavior. Operators can pause, resume, adjust learning rate, and set batch frequency without restarting the daemon.
+  - `LearningControl` struct (`src/learning_control.rs`) with `should_learn()`, `effective_rate()`, `pause()`, `resume()`, `set_rate()`, `set_batch_frequency()`
+  - Transport-agnostic API handlers (`src/dashboard/learning_api.rs`) for 5 commands: `learning_status`, `learning_pause`, `learning_resume`, `learning_set_rate`, `learning_set_batch_freq`
+  - `DetectionEngine` checks `LearningControl` before calling `graph.learn_with_rate()`
+  - `EdgeMatrix::strengthen_with_rate()` accepts external rate multiplier from the control valve
+  - `AttackGraph::learn_with_rate()` passes the rate through to edge strengthening
+  - Unit tests for control state, batch frequency, rate clamping, pause/resume, JSON roundtrip, and API routing
+
+### Changed
+- `src/graph/edges.rs` -- `strengthen()` now delegates to `strengthen_with_rate()` with rate 1.0
+- `src/graph/mod.rs` -- `learn()` now delegates to `learn_with_rate()` with rate 1.0
+- `src/detection/mod.rs` -- `process_events()` gates learning through `LearningControl` and passes the effective rate
+- `src/main.rs` -- Main loop no longer calls `update_graph()` or `learn()` directly. Comment clarifies that learning happens inside `process_events()`
+
 ## v0.1.0 - 2026-02-08
 
 Initial release.
@@ -63,6 +83,5 @@ Initial release.
 - Dashboard HTTP server (struct and endpoint definitions only)
 - Burst velocity detection (implemented, not wired in)
 - Weighted coverage scoring (implemented, not used by default)
-- Adaptive weight scoring (implemented, not called from main loop)
 - Phase correlation (implemented, not used by default)
 - EscalateMonitoring response type (logged only)

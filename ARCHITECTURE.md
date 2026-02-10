@@ -9,12 +9,13 @@ sentinel-shield/
   src/
     lib.rs                   Core types, config structs, error types
     main.rs                  CLI (start, stop, status, init-config), daemon loop
+    learning_control.rs      LearningControl valve -- pause/resume/rate/batch frequency
     detection/
-      mod.rs                 DetectionEngine -- groups events by IP, runs scorers
+      mod.rs                 DetectionEngine -- groups events by IP, runs scorers, gates learning
       velocity.rs            Events-per-window scorer (sliding window, saturation)
       coverage.rs            Unique-targets scorer (ports + endpoints)
       correlation.rs         Recon-to-exploit timing scorer
-      scorer.rs              Score formatting, threat level labels, adaptive scoring (stubbed)
+      scorer.rs              Score formatting, threat level labels, adaptive weight integration
     log_sources/
       mod.rs                 LogSourceRegistry -- polls all sources, byte offset tracking
       auth_log.rs            /var/log/auth.log parser (SSH events)
@@ -31,8 +32,9 @@ sentinel-shield/
       alerter.rs             JSONL logging, webhook POST, email queue (.eml)
     dashboard/
       mod.rs                 DashboardServer stub (endpoints defined, not serving)
+      learning_api.rs        Learning control API handlers (transport-agnostic)
   tests/
-    integration.rs           10 end-to-end pipeline tests
+    integration.rs           12 end-to-end pipeline tests
     attack_simulator.py      4-scenario log generator for testing
 ```
 
@@ -108,6 +110,17 @@ Sessions where `combined >= threat_threshold` are returned as threatening.
 
 ### Stage 4: Graph Learning
 
+Learning happens inside `DetectionEngine::process_events()`. The main daemon loop handles only prune and save -- it does not call `learn()` or `update_graph()` directly.
+
+The learning pipeline within `process_events()`:
+
+1. Each event is fed to `graph.add_observation()`, which queues Hebbian co-occurrence pairs.
+2. `update_graph()` extracts phase transitions from active sessions and calls `graph.strengthen_edge()`.
+3. `LearningControl::should_learn()` gates whether the queued pairs are applied. If learning is paused or the batch counter hasn't reached the frequency threshold, the pairs stay queued until next batch.
+4. When learning fires, `graph.learn_with_rate(rate)` applies all pending updates scaled by the control valve's effective rate multiplier.
+
+The `LearningControl` valve lives on `DetectionEngine` and is accessible via `learning_control()` / `learning_control_mut()`. The dashboard API handlers in `src/dashboard/learning_api.rs` accept commands and mutate the valve through these accessors.
+
 The `AttackGraph` maintains a 10x10 directed adjacency matrix where nodes are attack phases:
 
 ```
@@ -131,10 +144,10 @@ C2     [0.0   0.0    0.0    0.0    0.0      0.0     1.5     1.8     0.0    0.0]
 When action A is observed followed by action B from the same source within the co-occurrence window (default 1 hour):
 
 ```
-weight[A][B] += learning_rate * activation_a * activation_b
+weight[A][B] += learning_rate * rate_multiplier * activation_a * activation_b
 ```
 
-Where `learning_rate` is 0.05, `activation` is the confidence of each observation (0.0-1.0), and weight is capped at `max_weight` (10.0).
+Where `learning_rate` is 0.05, `rate_multiplier` comes from `LearningControl` (default 1.0, range 0.0-2.0), `activation` is the confidence of each observation (0.0-1.0), and weight is capped at `max_weight` (10.0).
 
 **Temporal decay:**
 
@@ -252,7 +265,7 @@ Correlation measures how quickly reconnaissance leads to exploitation from the s
 - Above `correlation_max_gap_secs` (default 300): score 0.0 (uncorrelated)
 - Between: linear interpolation
 
-The final correlation score is the average across all recon-to-exploit pairs in the session.
+The final correlation score is the maximum across all recon-to-exploit pairs in the session.
 
 ## How to Add a New Log Source
 

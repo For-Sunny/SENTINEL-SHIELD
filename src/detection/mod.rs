@@ -18,6 +18,7 @@ use std::net::IpAddr;
 
 use crate::graph::AttackGraph;
 use crate::graph::nodes::ActionType;
+use crate::learning_control::LearningControl;
 use crate::{
     AttackSession, DetectionConfig, DetectionEvent, EventType,
     ScoreWeights, ShieldResult, ThreatScore,
@@ -37,6 +38,11 @@ pub struct DetectionEngine {
 
     /// Score weights derived from config.
     weights: ScoreWeights,
+
+    /// Runtime control valve for Hebbian graph learning.
+    /// Operators can pause, resume, throttle, or adjust learning
+    /// without stopping detection.
+    learning_control: LearningControl,
 }
 
 impl DetectionEngine {
@@ -48,6 +54,7 @@ impl DetectionEngine {
             sessions: HashMap::new(),
             graph,
             weights,
+            learning_control: LearningControl::new(),
         }
     }
 
@@ -81,8 +88,12 @@ impl DetectionEngine {
         // Update Hebbian graph with phase transitions from sessions
         self.update_graph();
 
-        // Apply Hebbian learning on queued co-occurrence pairs
-        self.graph.learn();
+        // Apply Hebbian learning on queued co-occurrence pairs,
+        // gated by the learning control valve.
+        if self.learning_control.should_learn() {
+            let rate = self.learning_control.effective_rate();
+            self.graph.learn_with_rate(rate);
+        }
 
         // Re-score all sessions (now with graph knowledge)
         self.rescore_sessions();
@@ -225,6 +236,19 @@ impl DetectionEngine {
     /// Used by the main loop for periodic maintenance (learn, decay, prune, save).
     pub fn graph_mut(&mut self) -> &mut AttackGraph {
         &mut self.graph
+    }
+
+    /// Get a reference to the learning control valve.
+    pub fn learning_control(&self) -> &LearningControl {
+        &self.learning_control
+    }
+
+    /// Get a mutable reference to the learning control valve.
+    ///
+    /// Used by the dashboard API and command interface to pause, resume,
+    /// set rate, and adjust batch frequency at runtime.
+    pub fn learning_control_mut(&mut self) -> &mut LearningControl {
+        &mut self.learning_control
     }
 
     /// Remove stale sessions older than the given age in seconds.

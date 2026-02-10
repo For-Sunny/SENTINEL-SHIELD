@@ -11,8 +11,19 @@
 //! - `GET /alerts`    - JSON recent alerts
 //! - `GET /health`    - Simple health check (200 OK)
 //!
-//! The dashboard is read-only. It cannot modify shield behavior.
-//! All configuration changes must go through the config file.
+//! ## Learning Control API (read/write)
+//! - `GET  /api/learning/status`         - Current learning state
+//! - `POST /api/learning/pause`          - Pause graph learning (detection continues)
+//! - `POST /api/learning/resume`         - Resume graph learning
+//! - `POST /api/learning/set_rate`       - Set rate multiplier (body: {"value": f64})
+//! - `POST /api/learning/set_batch_freq` - Set batch frequency (body: {"value": u32})
+//!
+//! The learning control API is the one exception to the "read-only dashboard"
+//! rule. Operators need runtime control over graph learning without restarting
+//! the daemon. Detection itself is never affected -- only the Hebbian graph
+//! update step.
+
+pub mod learning_api;
 
 use crate::{DashboardConfig, ShieldResult};
 

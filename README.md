@@ -162,6 +162,28 @@ You can watch multiple files per source type. SENTINEL tracks byte offsets and h
 
 **Note:** The dashboard is currently a stub. It creates the server struct but does not serve HTTP yet. The `status` CLI command is the current way to inspect state.
 
+## Learning Control
+
+The Hebbian graph learns continuously by default. Five runtime commands let operators control that behavior without restarting the daemon.
+
+| Command | Method | What It Does |
+|---------|--------|-------------|
+| `learning_status` | GET | Returns current state: enabled/paused, rate multiplier, batch frequency. |
+| `learning_pause` | POST | Pauses learning. Detection continues unchanged -- the graph just stops updating. |
+| `learning_resume` | POST | Resumes learning from where it left off. |
+| `learning_set_rate` | POST | Sets a rate multiplier (0.0-2.0) on the Hebbian learning rate. 0.5 = half speed. 2.0 = double. Clamped at boundaries. |
+| `learning_set_batch_freq` | POST | Learn every N event batches instead of every batch. Set to 3 and the graph updates on every third batch, reducing CPU cost at the expense of granularity. Minimum 1. |
+
+These commands are transport-agnostic. The handler layer (`src/dashboard/learning_api.rs`) accepts a command name and optional value, returns a JSON response with the operation result and current state. Wire them to HTTP, CLI, or MCP -- the handlers don't care.
+
+**When to use this:**
+
+- **Incident response** -- Pause learning during a known attack so the graph doesn't over-fit to one adversary's pattern.
+- **Tuning** -- Lower the rate multiplier while observing how the graph evolves. Raise it when you trust the input quality.
+- **Cost control** -- On high-traffic hosts, set batch frequency to 5 or 10 so the graph learns from a sample rather than every batch.
+
+Detection scoring is unaffected by these controls. Pausing learning pauses the graph, not the shield.
+
 ## How Detection Works
 
 ### Threat Scoring
@@ -319,6 +341,7 @@ Uses RFC 5737 TEST-NET addresses (203.0.113.0/24 for attackers, 198.51.100.0/24 
 - Three log source parsers (auth.log, Apache/Nginx combined, syslog)
 - Three detection dimensions (velocity, coverage, correlation)
 - Hebbian attack graph with MITRE-seeded weights, learning, decay, persistence
+- Runtime learning control (pause, resume, rate adjustment, batch frequency)
 - Ten MITRE-based kill chain patterns with subsequence matching
 - IP blocking via iptables (Linux) and netsh (Windows)
 - Alert logging (JSONL file), webhook notifications, email queue
@@ -331,13 +354,11 @@ Uses RFC 5737 TEST-NET addresses (203.0.113.0/24 for attackers, 198.51.100.0/24 
 - Dashboard HTTP server (struct exists, endpoints defined, `run()` returns immediately)
 - Burst velocity detection (`calculate_burst_velocity` implemented but not wired into the main scorer)
 - Weighted coverage scoring (`calculate_weighted_coverage_score` implemented but not used by default)
-- Adaptive weight scoring (`compute_adaptive_weights` implemented but not called from the main loop)
 - Phase correlation (`calculate_phase_correlation` implemented but not used by default)
 - `EscalateMonitoring` response type (logged, not implemented)
 
 **Planned:**
 - Dashboard with real-time session/graph visualization
-- Adaptive scoring integration (graph-learned weights feeding back into the scorer)
 - Block expiry (automatic unblock after configured duration)
 - IPv6 support in log parsers (currently IPv4 only for auth.log and syslog extraction)
 - Systemd service file and packaging

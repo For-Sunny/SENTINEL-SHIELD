@@ -104,7 +104,24 @@ impl EdgeMatrix {
     /// - activation_a: confidence that action A was observed (0.0-1.0)
     /// - activation_b: confidence that action B was observed (0.0-1.0)
     pub fn strengthen(&mut self, from: ActionType, to: ActionType, activation_a: f64, activation_b: f64) {
-        let delta = self.params.learning_rate * activation_a * activation_b;
+        self.strengthen_with_rate(from, to, activation_a, activation_b, 1.0);
+    }
+
+    /// Hebbian strengthening with an external rate multiplier.
+    ///
+    /// Formula: weight += learning_rate * rate * activation_a * activation_b
+    ///
+    /// The `rate` parameter is an external multiplier from the LearningControl
+    /// valve. 1.0 = normal, 0.5 = half speed, 2.0 = double speed.
+    pub fn strengthen_with_rate(
+        &mut self,
+        from: ActionType,
+        to: ActionType,
+        activation_a: f64,
+        activation_b: f64,
+        rate: f64,
+    ) {
+        let delta = self.params.learning_rate * rate * activation_a * activation_b;
         let i = from.index();
         let j = to.index();
         self.weights[i][j] = (self.weights[i][j] + delta).min(self.params.max_weight);

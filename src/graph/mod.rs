@@ -192,10 +192,24 @@ impl AttackGraph {
     /// N observations or on a timer).
     ///
     /// Also applies decay every `config.decay_interval` learn cycles.
+    ///
+    /// Equivalent to `learn_with_rate(1.0)`.
     pub fn learn(&mut self) {
-        // Apply all pending Hebbian updates
+        self.learn_with_rate(1.0);
+    }
+
+    /// Run Hebbian learning with an external rate multiplier.
+    ///
+    /// The `rate` parameter scales the edge weight delta on each
+    /// pending update. A rate of 1.0 is normal learning. A rate of
+    /// 0.5 halves the learning speed. A rate of 2.0 doubles it.
+    ///
+    /// This is the entry point used by `DetectionEngine` when the
+    /// `LearningControl` valve provides a rate multiplier.
+    pub fn learn_with_rate(&mut self, rate: f64) {
+        // Apply all pending Hebbian updates, scaled by the external rate
         for (from, to, act_a, act_b) in self.pending_updates.drain(..) {
-            self.edges.strengthen(from, to, act_a, act_b);
+            self.edges.strengthen_with_rate(from, to, act_a, act_b, rate);
         }
 
         self.learn_cycles += 1;

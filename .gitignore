@@ -37,3 +37,7 @@ sentinel-shield-test/
 auth.log
 access.log
 syslog.log
+
+# Windows device name artifacts
+nul
+NUL

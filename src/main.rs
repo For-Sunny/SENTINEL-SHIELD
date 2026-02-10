@@ -240,8 +240,7 @@ async fn cmd_start(config_path: &Path) -> ShieldResult<()> {
                 }
             }
 
-            // 5. Update graph with learned patterns
-            engine.update_graph();
+            // Graph learning happens inside process_events() — main loop handles prune/save only
         }
 
         cycles += 1;
@@ -256,8 +255,7 @@ async fn cmd_start(config_path: &Path) -> ShieldResult<()> {
                 info!("Pruned {} stale sessions", pruned);
             }
 
-            // Decay and prune the attack graph
-            engine.graph_mut().learn();
+            // Prune stale graph nodes (learning already happens per-batch in process_events)
             engine.graph_mut().prune(chrono::Utc::now());
 
             // Save graph state to disk

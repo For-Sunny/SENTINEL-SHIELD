@@ -13,10 +13,11 @@
 //! - Lightweight enough for a small company's single server.
 
 pub mod detection;
-pub mod log_sources;
-pub mod response;
 pub mod graph;
 pub mod dashboard;
+pub mod learning_control;
+pub mod log_sources;
+pub mod response;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
