@@ -367,8 +367,12 @@ Uses RFC 5737 TEST-NET addresses (203.0.113.0/24 for attackers, 198.51.100.0/24 
 
 Apache License 2.0. See [LICENSE](LICENSE).
 
-## Built By
+---
 
-[CIPS Corp](https://cipscorps.io) -- glass@cipscorps.io
+**Made by [CIPS Corp](https://cipscorps.io)**
 
-Built in a basement. No venture capital. No oversight committee. Just a belief that small companies deserve security tools that actually work.
+glass@cipscorps.io | [GitHub](https://github.com/For-Sunny) | [Store](https://store.cipscorps.io)
+
+Enterprise memory infrastructure for AI systems: [CASCADE Enterprise, PyTorch Memory, Hebbian Mind, and the full CIPS Stack](https://store.cipscorps.io).
+
+Copyright (c) 2025-2026 C.I.P.S. LLC
